@@ -1,0 +1,86 @@
+# 屏幕监控系统配置文件
+# 修改后重启程序生效
+
+# ─── 网络 ───
+network:
+  host: "0.0.0.0"
+  port: 8765
+  token: "exam2024"            # 认证令牌，客户端必须携带此值才能注册
+
+# ─── TLS 加密（可选） ───
+tls:
+  enabled: false               # 是否启用 WSS 加密
+  cert_file: "cert.pem"       # 服务端证书
+  key_file: "key.pem"         # 服务端私钥
+  ca_file: "ca.pem"           # 客户端信任的 CA 证书
+
+# ─── 截屏 ───
+screenshot:
+  interval: 5                   # 采样间隔（秒）
+  quality: 60                   # JPEG 压缩质量 (1-100)
+  dir: "screenshots"            # 本地截图保存目录
+  save_local: false             # 考生端设为 false：仅上传监考端，不在本地保存
+  retention_days: 7             # 截图保留天数，超过自动清理
+  multi_monitor: true           # 是否抓取所有显示器
+
+# ─── 变化检测（感知哈希） ───
+hash:
+  size: 16                      # 哈希尺寸 16x16=256bit
+  send_threshold: 24            # 汉明距离 ≥ 此值才上传（明显变化）
+  local_threshold: 4            # 汉明距离 ≥ 此值才本地存档
+  force_send_interval: 30       # 无论是否变化，每 N 秒强制上传一张（反冻结）
+
+# ─── 窗口检测 ───
+window:
+  check_interval: 1             # 焦点检测间隔（秒）
+  violation_confirm_count: 3    # 连续违规次数阈值（过滤误触）
+  whitelist:                    # 窗口标题白名单关键词（包含任一即合法）
+    - "洛谷"
+  whitelist_processes: []       # 进程名白名单（可空）
+
+# ─── 考试网址与全屏强制 ───
+exam:
+  enabled: true                 # 是否强制浏览器停留在考试网址且全屏
+  url_whitelist:                # 考试网址白名单（域名，或 域名/路径 前缀）
+    - "luogu.com.cn"            # 例："luogu.com.cn/contest/12345" 可限定到具体比赛页
+  browsers:                     # 需要校验网址的浏览器进程
+    - "chrome.exe"
+    - "msedge.exe"
+    - "firefox.exe"
+    - "360se.exe"
+    - "360chrome.exe"
+  fullscreen_required: true     # 浏览器必须全屏（F11）
+  grace_seconds: 120            # 启动宽限期（秒）：考生打开浏览器进入考试页的时间
+  strict_url_check: false       # true=读不到网址直接判违规；false=退回标题白名单
+
+# ─── 客户端 ───
+client:
+  heartbeat_interval: 3         # 心跳间隔（秒）
+  connect_timeout: 5            # 连接超时（秒）
+  reconnect_base_delay: 2       # 断线重连基础延迟（秒）
+  reconnect_max_delay: 30       # 断线重连最大延迟（秒）
+  lock_mode: "popup"            # popup=违规时才弹出锁定界面（推荐，不遮挡考试画面）
+                                # overlay=全程全屏锁定（旧行为，截图会被锁定界面遮挡）
+  alert_hold_seconds: 0         # popup 违规警示保持秒数，0=保持到考生恢复合规
+
+# ─── 监考端 ───
+server:
+  client_timeout: 15            # 超过此秒数无心跳视为掉线
+  freeze_timeout: 90            # 在线但超过此秒数无截图帧视为画面冻结
+  alert_hold_seconds: 300       # 状态灯红色保持时长（秒），随后自动恢复绿色
+  alert_flash_duration: 3000    # 报警横幅闪烁时长（毫秒）
+  max_screenshot_history: 200   # 每考生最多保留截图历史条数
+  preview_refresh_ms: 2000      # 截图预览刷新间隔（毫秒）
+  db_file: "monitor.db"         # SQLite 数据库文件
+  cleanup_interval: 3600        # 过期数据清理间隔（秒）
+  teacher_password: ""          # 非空时「结束监考/导出日志」需输入此口令
+  max_screenshots_disk: 0       # 落盘截图数量上限（0=不限制，仅按 retention_days 清理）
+
+# ─── 颜色（GUI） ───
+colors:
+  normal: "#4CAF50"             # 绿色 - 正常
+  alert: "#F44336"              # 红色 - 报警
+  offline: "#9E9E9E"            # 灰色 - 掉线
+  bg: "#1a1a2e"                 # 深色背景
+  card_bg: "#16213e"            # 卡片背景
+  text: "#e0e0e0"               # 文字颜色

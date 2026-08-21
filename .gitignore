@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.spec
+build/
+dist/
+monitor.db
+*.log
+screenshots/
+exports/
+*.csv
+使用说明.md.bak
