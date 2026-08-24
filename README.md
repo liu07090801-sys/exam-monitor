@@ -225,7 +225,7 @@ exam:
     - "msedge.exe"
     - "firefox.exe"
   fullscreen_required: true    # 浏览器必须全屏（F11）
-  grace_seconds: 120           # 启动宽限期（秒）
+  grace_seconds: 30           # 启动宽限期（秒）
   strict_url_check: false      # 读不到网址时是否直接判违规
 ```
 
@@ -304,15 +304,27 @@ tls:
 ### 7.1 考前准备
 
 1. 确保所有机器在同一局域网，端口 8765 可互通
-2. 修改 `config.yaml` 中的 `token`（建议使用复杂随机字符串）
-3. 根据考试需求调整白名单、截屏间隔等参数
-4. 在所有考试端安装依赖：`pip install -r requirements.txt`
+2. 监考端与考生端均需放行防火墙 8765 端口（以管理员身份运行）：
+
+   **Windows（推荐，只放行端口）：**
+   ```powershell
+   netsh advfirewall firewall add rule name="考试监控8765" dir=in action=allow protocol=TCP localport=8765
+   ```
+
+   首次启动时如弹出 Windows 防火墙提示，请点「允许访问」。
+
+   **如需临时关闭防火墙（不推荐，测完记得开启）：**
+   打开 Windows 安全中心 → 防火墙和网络保护 → 关闭 Microsoft Defender 防火墙
+
+3. 修改 `config.yaml` 中的 `token`（建议使用复杂随机字符串）
+4. 根据考试需求调整白名单、截屏间隔等参数
+5. 在所有考试端安装依赖：`pip install -r requirements.txt`
 
 ### 7.2 考试期间
 
 1. **监考老师**先启动 `python server.py`
 2. **考生**依次启动 `python client.py --student-id 学号 --server ws://监考端IP:8765`
-3. **考生**在宽限期（`exam.grace_seconds`，默认 120 秒）内打开浏览器，进入洛谷考试网址并按 F11 全屏，超时未就位将报警
+3. **考生**在宽限期（`exam.grace_seconds`，默认 30 秒）内打开浏览器，进入洛谷考试网址并按 F11 全屏，超时未就位将报警
 4. 监考端仪表盘实时显示所有考生状态
 5. 发现异常（切屏/网址/未全屏报警、画面冻结、掉线）时及时处理
 
