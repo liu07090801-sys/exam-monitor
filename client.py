@@ -35,6 +35,7 @@ import websockets
 from PIL import Image
 
 import config
+import theme
 
 # ─── 安全锁定：以下值硬编码进 exe，config.yaml 无法覆盖 ───
 # 考生即使修改 config.yaml 也无法关闭考试强制、放宽白名单或禁用全屏要求
@@ -473,96 +474,143 @@ class ExamClient:
         self._alert_hide_after = None
         # GUI
         self.root = None
-        self.status_label = None
-        self.alert_label = None
-        self.counter_label = None
+        self.top_bar = None
+        self.status_pill = None
+        self.shot_pill = None
+        self.alert_pill = None
+        self.grace_pill = None
         self.current_window_label = None
         self.alert_frame = None
+        self.alert_banner = None
         self.center_frame = None
+        self.center_title = None
+        self.center_sub = None
+        self.center_icon = None
         self._last_win_update = 0
+        self._grace_shown = False
 
     # ──────────── GUI ────────────
 
     def setup_gui(self):
+        Pal, font = theme.Pal, theme.font
         self.root = tk.Tk()
+        theme.style(self.root)
         self.root.title("考试监控客户端")
-        self.root.configure(bg=config.COLOR_BG)
+        self.root.configure(bg=Pal.bg)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-fullscreen", True)
+        # 无边框自绘顶栏：全屏警示更沉浸，角落状态窗更像悬浮卡片
+        self.root.overrideredirect(True)
+        self._fullscreen_geom()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close_attempt)
 
         self.root.bind("<Alt-F4>", lambda e: "break")
         self.root.bind("<Escape>", lambda e: "break")
         self.root.bind("<Control-w>", lambda e: "break")
 
-        self.top_bar = tk.Frame(self.root, bg=config.COLOR_CARD_BG, height=50)
+        # ── 顶部状态栏 ──
+        self.top_bar = tk.Frame(self.root, bg=Pal.card, height=54)
         self.top_bar.pack(fill=tk.X, side=tk.TOP)
         self.top_bar.pack_propagate(False)
+        tk.Frame(self.root, bg=Pal.border, height=1).pack(fill=tk.X, side=tk.TOP)
 
-        self.status_label = tk.Label(
-            self.top_bar, text="● 连接中...", font=("Microsoft YaHei", 12),
-            bg=config.COLOR_CARD_BG, fg="#FFC107",
-        )
-        self.status_label.pack(side=tk.LEFT, padx=15)
+        brand = tk.Frame(self.top_bar, bg=Pal.card)
+        brand.pack(side=tk.LEFT, padx=(16, 0))
+        logo = tk.Canvas(brand, width=26, height=26, bg=Pal.card, highlightthickness=0)
+        logo.pack(side=tk.LEFT, pady=14)
+        theme.draw_shield(logo, 13, 13, 22, Pal.accent)
+        tk.Label(brand, text="考试监控", font=font(12, "bold"), bg=Pal.card,
+                 fg=Pal.text).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(brand, text=f"考生 {self.student_id}", font=font(9), bg=Pal.card,
+                 fg=Pal.muted).pack(side=tk.LEFT, padx=(10, 0))
 
+        right = tk.Frame(self.top_bar, bg=Pal.card)
+        right.pack(side=tk.RIGHT, padx=(0, 16))
+        self.alert_pill = theme.Pill(right, "报警 0", dot=Pal.offline, size=9,
+                                     padx=10, pady=4, bg=Pal.hover, fg=Pal.muted,
+                                     surround=Pal.card)
+        self.shot_pill = theme.Pill(right, "截屏 0", dot=Pal.accent, size=9,
+                                    padx=10, pady=4, bg=Pal.hover, fg=Pal.muted,
+                                    surround=Pal.card)
+        self.shot_pill.pack(side=tk.LEFT, padx=(0, 6))
+        self.alert_pill.pack(side=tk.LEFT)
+
+        self.status_pill = theme.Pill(self.top_bar, "连接中…", dot=Pal.warn, size=10,
+                                      padx=13, pady=5, bg=Pal.hover, fg=Pal.warn,
+                                      surround=Pal.card)
+        self.status_pill.pack(side=tk.LEFT, padx=(28, 0))
         self.current_window_label = tk.Label(
-            self.top_bar, text="当前窗口: 正在检测...", font=("Microsoft YaHei", 10),
-            bg=config.COLOR_CARD_BG, fg="#888888",
-        )
-        self.current_window_label.pack(side=tk.LEFT, padx=15)
+            self.top_bar, text="当前窗口: 正在检测…", font=font(10),
+            bg=Pal.card, fg=Pal.muted)
+        self.current_window_label.pack(side=tk.LEFT, padx=16)
+        self.grace_pill = theme.Pill(self.top_bar, "", dot=Pal.warn, size=9,
+                                     padx=10, pady=4, bg=Pal.hover, fg=Pal.warn,
+                                     surround=Pal.card)
+        self._tick_grace()
 
-        self.counter_label = tk.Label(
-            self.top_bar, text=f"考生: {self.student_id} | 截屏: 0 | 报警: 0",
-            font=("Microsoft YaHei", 11), bg=config.COLOR_CARD_BG, fg=config.COLOR_TEXT,
-        )
-        self.counter_label.pack(side=tk.RIGHT, padx=15)
+        # ── 违规警示横幅（默认隐藏）──
+        self.alert_frame = tk.Frame(self.root, bg=Pal.bg)
+        self.alert_banner = theme.Banner(self.alert_frame, surround=Pal.bg, height=52)
+        self.alert_banner.pack(fill=tk.X, padx=16, pady=(10, 2))
 
-        self.alert_frame = tk.Frame(self.root, bg=config.COLOR_ALERT, height=40)
-        self.alert_label = tk.Label(
-            self.alert_frame, text="", font=("Microsoft YaHei", 12, "bold"),
-            bg=config.COLOR_ALERT, fg="white",
-        )
-        self.alert_label.pack(expand=True)
+        # ── 中央主卡片 ──
+        self.center_frame = tk.Frame(self.root, bg=Pal.bg)
+        self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
+        card = theme.Card(self.center_frame, pad=36, min_h=420, min_w=660)
+        card.pack()
+        icon = tk.Canvas(card.inner, width=96, height=96, bg=Pal.card,
+                         highlightthickness=0)
+        theme.draw_shield(icon, 48, 48, 84, Pal.accent)
+        icon.pack(pady=(18, 10))
+        self.center_icon = icon
+        self.center_title = tk.Label(card.inner, text="考试监控已启动",
+                                     font=font(26, "bold"), bg=Pal.card, fg=Pal.text)
+        self.center_title.pack()
+        self.center_sub = tk.Label(card.inner, text="正在监控屏幕，请勿切换到其他窗口",
+                                   font=font(12), bg=Pal.card, fg=Pal.warn,
+                                   justify=tk.CENTER)
+        self.center_sub.pack(pady=(10, 20))
 
-        self.center_frame = tk.Frame(self.root, bg=config.COLOR_BG)
-        center_frame = self.center_frame
-        center_frame.place(relx=0.5, rely=0.5, anchor="center")
-
-        tk.Label(
-            center_frame, text="考试监控已启动",
-            font=("Microsoft YaHei", 28, "bold"),
-            bg=config.COLOR_BG, fg=config.COLOR_TEXT,
-        ).pack()
-
-        tk.Label(
-            center_frame, text="请勿切换窗口，系统正在监控屏幕",
-            font=("Microsoft YaHei", 14),
-            bg=config.COLOR_BG, fg="#FF5722",
-        ).pack(pady=(10, 0))
-
-        tk.Label(
-            center_frame,
-            text=f"白名单窗口: {', '.join(config.WHITE_LIST[:5])}",
-            font=("Microsoft YaHei", 10),
-            bg=config.COLOR_BG, fg="#888888",
-        ).pack(pady=(20, 0))
-
+        chips = card.add()
+        chips.pack()
         monitor_info = "多屏拼接" if config.MULTI_MONITOR else "单屏"
-        tk.Label(
-            center_frame, text=f"截屏模式: {monitor_info}",
-            font=("Microsoft YaHei", 10),
-            bg=config.COLOR_BG, fg="#666666",
-        ).pack(pady=(5, 0))
+        for text in (
+            f"白名单: {', '.join(config.WHITE_LIST[:5])}",
+            f"截屏模式: {monitor_info}",
+            f"服务器: {self.server_url.replace('wss://', '').replace('ws://', '')}",
+        ):
+            theme.Pill(chips, text, size=9, padx=12, pady=5, bg=Pal.deep,
+                       fg=Pal.muted, surround=Pal.card).pack(side=tk.LEFT, padx=5)
+        tk.Label(card.inner, text="如需退出请联系监考老师", font=font(9),
+                 bg=Pal.card, fg=theme.darker(Pal.muted, 0.25)).pack(pady=(26, 16))
 
-        tk.Label(
-            center_frame, text="如需退出请联系监考老师",
-            font=("Microsoft YaHei", 10),
-            bg=config.COLOR_BG, fg="#666666",
-        ).pack(pady=(5, 0))
+    def _fullscreen_geom(self):
+        """无边框模式下用几何铺满整个屏幕（顺带盖住任务栏，锁定更彻底）。"""
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{sw}x{sh}+0+0")
+
+    def _tick_grace(self):
+        """准备阶段倒计时徽章：宽限期结束后自动隐藏。"""
+        try:
+            if not self.root or not self.root.winfo_exists():
+                return
+        except Exception:
+            return
+        remain = int(self.exam_grace_until - time.time())
+        if remain > 0:
+            if not self._grace_shown:
+                self.grace_pill.pack(side=tk.LEFT, padx=(12, 0))
+                self._grace_shown = True
+            self.grace_pill.set(f"准备阶段 {remain}s")
+        elif self._grace_shown:
+            self.grace_pill.pack_forget()
+            self._grace_shown = False
+        self.root.after(1000, self._tick_grace)
 
     def update_status(self, text, color):
-        if self.status_label:
-            self.status_label.config(text=text, fg=color)
+        clean = text.lstrip("● ").strip()
+        if self.status_pill:
+            self.status_pill.set(clean, fg=color, dot=color)
         if self._lock_mode == "popup" and self._popup_state != "alert":
             # 断开/异常时弹出角落状态窗；正常连接时隐藏（不遮挡考试页面）
             if any(k in text for k in ("重连", "断开", "异常", "认证失败", "拒绝", "失败")):
@@ -571,15 +619,32 @@ class ExamClient:
                 self._set_popup("hidden")
 
     def update_counter(self):
-        if self.counter_label:
-            self.counter_label.config(
-                text=f"考生: {self.student_id} | 截屏: {self.screenshot_count} | 报警: {self.alert_count}"
-            )
+        Pal = theme.Pal
+        if self.shot_pill:
+            self.shot_pill.set(f"截屏 {self.screenshot_count}")
+        if self.alert_pill:
+            if self.alert_count:
+                self.alert_pill.set(f"报警 {self.alert_count}", fg="#ffffff",
+                                    dot="#ffffff",
+                                    bg=theme.darker(config.COLOR_ALERT, 0.18))
+            else:
+                self.alert_pill.set("报警 0", fg=Pal.muted, dot=Pal.offline,
+                                    bg=Pal.hover)
 
     def show_alert(self, message):
-        if self.alert_frame and self.alert_label:
-            self.alert_label.config(text=f"⚠ {message}")
+        if self.alert_frame is not None:
+            self.alert_banner.set(message)
+            self.alert_banner.start_pulse()
             self.alert_frame.pack(fill=tk.X, side=tk.TOP, before=self.top_bar)
+            if self.center_title:
+                self.center_title.config(text="检测到违规行为",
+                                         fg=config.COLOR_ALERT)
+                self.center_sub.config(
+                    text=f"{message}\n请立即返回考试页面", fg=theme.Pal.text)
+                if getattr(self, "center_icon", None):
+                    self.center_icon.delete("all")
+                    theme.draw_shield(self.center_icon, 48, 48, 84,
+                                      config.COLOR_ALERT, check=False)
         self._alert_active = True
         if self._lock_mode == "popup":
             # popup 模式：平时窗口隐藏，违规时才弹出全屏警示
@@ -596,8 +661,18 @@ class ExamClient:
             self.root.after(config.ALERT_FLASH_DURATION, self.hide_alert)
 
     def hide_alert(self):
-        if self.alert_frame:
+        if self.alert_frame is not None:
+            self.alert_banner.stop_pulse()
             self.alert_frame.pack_forget()
+            if self.center_title:
+                self.center_title.config(text="考试监控已启动",
+                                         fg=theme.Pal.text)
+                self.center_sub.config(text="正在监控屏幕，请勿切换到其他窗口",
+                                       fg=theme.Pal.warn)
+                if getattr(self, "center_icon", None):
+                    self.center_icon.delete("all")
+                    theme.draw_shield(self.center_icon, 48, 48, 84,
+                                      theme.Pal.accent)
         self._alert_active = False
         # 取消 pending 的自动隐藏定时器，避免旧定时器提前撤掉新一轮警示
         if self._alert_hide_after is not None:
@@ -618,17 +693,16 @@ class ExamClient:
         if state == "hidden":
             self.root.withdraw()
         elif state == "alert":
-            self.root.attributes("-fullscreen", True)
+            self._fullscreen_geom()
             if self.center_frame is not None:
                 self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
             self.root.deiconify()
             self.root.lift()
         elif state == "small":
-            self.root.attributes("-fullscreen", False)
             if self.center_frame is not None:
                 self.center_frame.place_forget()  # 小窗只显示状态栏，隐藏大字号提示
             sw = self.root.winfo_screenwidth()
-            self.root.geometry(f"480x140+{max(sw - 500, 0)}+40")
+            self.root.geometry(f"560x110+{max(sw - 580, 0)}+36")
             self.root.deiconify()
             self.root.lift()
 

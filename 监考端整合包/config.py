@@ -25,8 +25,8 @@ _DEFAULTS = {
         "ca_file": "ca.pem",
     },
     "screenshot": {
-        "interval": 5, "quality": 60, "dir": "screenshots",
-        "retention_days": 7, "multi_monitor": True,
+        "interval": 5, "quality": 60, "dir": "screenshots", "save_local": True,
+        "save_local": True, "retention_days": 7, "multi_monitor": True,
     },
     "hash": {
         "size": 16, "send_threshold": 24,
@@ -58,8 +58,11 @@ _DEFAULTS = {
         "teacher_password": "", "max_screenshots_disk": 0,
     },
     "colors": {
-        "normal": "#4CAF50", "alert": "#F44336", "offline": "#9E9E9E",
-        "bg": "#1a1a2e", "card_bg": "#16213e", "text": "#e0e0e0",
+        "normal": "#34d399", "alert": "#f87171", "offline": "#64748b",
+        "bg": "#0b1120", "card_bg": "#151f38", "text": "#e6eaf2",
+        "text_muted": "#8a94ad", "accent": "#4f8cff", "accent2": "#8b5cf6",
+        "warn": "#fbbf24", "success": "#34d399",
+        "border": "#26324f", "hover": "#1d2a4a",
     },
 }
 
@@ -101,6 +104,8 @@ TLS_CA_FILE: str = _cfg["tls"]["ca_file"]
 SCREENSHOT_INTERVAL: int = _cfg["screenshot"]["interval"]
 SCREENSHOT_QUALITY: int = _cfg["screenshot"]["quality"]
 SCREENSHOT_DIR: str = _cfg["screenshot"]["dir"]
+SAVE_LOCAL: bool = _cfg["screenshot"]["save_local"]
+SAVE_LOCAL: bool = _cfg["screenshot"]["save_local"]
 SCREENSHOT_RETENTION_DAYS: int = _cfg["screenshot"]["retention_days"]
 MULTI_MONITOR: bool = _cfg["screenshot"]["multi_monitor"]
 
@@ -152,6 +157,13 @@ COLOR_OFFLINE: str = _cfg["colors"]["offline"]
 COLOR_BG: str = _cfg["colors"]["bg"]
 COLOR_CARD_BG: str = _cfg["colors"]["card_bg"]
 COLOR_TEXT: str = _cfg["colors"]["text"]
+COLOR_TEXT_MUTED: str = _cfg["colors"].get("text_muted", "#8a94ad")
+COLOR_ACCENT: str = _cfg["colors"].get("accent", "#4f8cff")
+COLOR_ACCENT2: str = _cfg["colors"].get("accent2", "#8b5cf6")
+COLOR_WARN: str = _cfg["colors"].get("warn", "#fbbf24")
+COLOR_SUCCESS: str = _cfg["colors"].get("success", COLOR_NORMAL)
+COLOR_BORDER: str = _cfg["colors"].get("border", "#26324f")
+COLOR_HOVER: str = _cfg["colors"].get("hover", "#1d2a4a")
 
 
 def reload():
@@ -159,7 +171,7 @@ def reload():
     global _cfg
     global SERVER_HOST, SERVER_PORT, AUTH_TOKEN
     global USE_TLS, TLS_CERT_FILE, TLS_KEY_FILE, TLS_CA_FILE
-    global SCREENSHOT_INTERVAL, SCREENSHOT_QUALITY, SCREENSHOT_DIR
+    global SCREENSHOT_INTERVAL, SCREENSHOT_QUALITY, SCREENSHOT_DIR, SAVE_LOCAL
     global SCREENSHOT_RETENTION_DAYS, MULTI_MONITOR
     global HASH_SIZE, HASH_SEND_THRESHOLD, HASH_LOCAL_THRESHOLD, FORCE_SEND_INTERVAL
     global FOCUS_CHECK_INTERVAL, VIOLATION_CONFIRM_COUNT, WHITE_LIST, WHITELIST_PROCESSES
@@ -170,6 +182,8 @@ def reload():
     global CLIENT_TIMEOUT, FREEZE_TIMEOUT, ALERT_HOLD_SECONDS, ALERT_FLASH_DURATION, MAX_SCREENSHOT_HISTORY, PREVIEW_REFRESH_MS
     global DB_FILE, CLEANUP_INTERVAL, TEACHER_PASSWORD, MAX_SCREENSHOTS_DISK
     global COLOR_NORMAL, COLOR_ALERT, COLOR_OFFLINE, COLOR_BG, COLOR_CARD_BG, COLOR_TEXT
+    global COLOR_TEXT_MUTED, COLOR_ACCENT, COLOR_ACCENT2, COLOR_WARN, COLOR_SUCCESS
+    global COLOR_BORDER, COLOR_HOVER
 
     _cfg = _load_yaml()
 
@@ -185,6 +199,7 @@ def reload():
     SCREENSHOT_INTERVAL = _cfg["screenshot"]["interval"]
     SCREENSHOT_QUALITY = _cfg["screenshot"]["quality"]
     SCREENSHOT_DIR = _cfg["screenshot"]["dir"]
+    SAVE_LOCAL = _cfg["screenshot"]["save_local"]
     SCREENSHOT_RETENTION_DAYS = _cfg["screenshot"]["retention_days"]
     MULTI_MONITOR = _cfg["screenshot"]["multi_monitor"]
 
@@ -230,3 +245,10 @@ def reload():
     COLOR_BG = _cfg["colors"]["bg"]
     COLOR_CARD_BG = _cfg["colors"]["card_bg"]
     COLOR_TEXT = _cfg["colors"]["text"]
+    COLOR_TEXT_MUTED = _cfg["colors"].get("text_muted", "#8a94ad")
+    COLOR_ACCENT = _cfg["colors"].get("accent", "#4f8cff")
+    COLOR_ACCENT2 = _cfg["colors"].get("accent2", "#8b5cf6")
+    COLOR_WARN = _cfg["colors"].get("warn", "#fbbf24")
+    COLOR_SUCCESS = _cfg["colors"].get("success", COLOR_NORMAL)
+    COLOR_BORDER = _cfg["colors"].get("border", "#26324f")
+    COLOR_HOVER = _cfg["colors"].get("hover", "#1d2a4a")

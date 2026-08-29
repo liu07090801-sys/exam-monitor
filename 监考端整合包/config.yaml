@@ -75,11 +75,18 @@ server:
   teacher_password: ""          # 非空时「结束监考/导出日志」需输入此口令
   max_screenshots_disk: 0       # 落盘截图数量上限（0=不限制，仅按 retention_days 清理）
 
-# ─── 颜色（GUI） ───
+# ─── 颜色（GUI 主题，theme.py 读取） ───
 colors:
-  normal: "#4CAF50"             # 绿色 - 正常
-  alert: "#F44336"              # 红色 - 报警
-  offline: "#9E9E9E"            # 灰色 - 掉线
-  bg: "#1a1a2e"                 # 深色背景
-  card_bg: "#16213e"            # 卡片背景
-  text: "#e0e0e0"               # 文字颜色
+  normal: "#34d399"             # 状态灯 - 正常（绿）
+  alert: "#f87171"              # 状态灯 - 报警（红）
+  offline: "#64748b"            # 状态灯 - 掉线（灰）
+  bg: "#0b1120"                 # 窗口底色（深墨蓝）
+  card_bg: "#151f38"            # 卡片背景
+  text: "#e6eaf2"               # 主文字
+  text_muted: "#8a94ad"         # 次要文字
+  accent: "#4f8cff"             # 主强调色（按钮/品牌）
+  accent2: "#8b5cf6"            # 次强调色（紫色点缀）
+  warn: "#fbbf24"               # 警告黄（连接中等瞬态）
+  success: "#34d399"            # 成功绿
+  border: "#26324f"             # 描边
+  hover: "#1d2a4a"              # 徽章/悬停底色

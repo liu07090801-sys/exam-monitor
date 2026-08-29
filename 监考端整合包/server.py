@@ -35,6 +35,7 @@ import websockets
 from PIL import Image, ImageTk
 
 import config
+import theme
 
 # ─── 日志 ───
 logging.basicConfig(
@@ -263,154 +264,273 @@ class MonitorServer:
         self.alert_banner = None
         self.log_text = None
         self.event_log = []  # 内存中的近期日志（GUI 用）
+        self._log_records: list[tuple[str, str, str, str]] = []  # 过滤重绘用
+        self._log_filter = "全部"
+        self._log_rows = 0
+        self._grid_cols = -1
 
     # ──────────── GUI ────────────
 
     def setup_gui(self):
+        Pal, font = theme.Pal, theme.font
         self.root = tk.Tk()
-        self.root.title("监考中心 - 屏幕监控系统")
-        self.root.configure(bg=config.COLOR_BG)
-        self.root.geometry("1200x800")
-        self.root.minsize(900, 600)
+        theme.style(self.root)
+        self.root.title("监考中心 · 屏幕监控系统")
+        self.root.configure(bg=Pal.bg)
+        self.root.geometry("1280x840")
+        self.root.minsize(980, 640)
 
-        # 顶部标题栏
-        header = tk.Frame(self.root, bg=config.COLOR_CARD_BG, height=60)
+        # ── 顶部品牌栏 ──
+        header = tk.Frame(self.root, bg=Pal.card)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
+        header.configure(height=70)
+        tk.Frame(self.root, bg=Pal.border, height=1).pack(fill=tk.X)
 
-        tk.Label(
-            header, text="监考中心", font=("Microsoft YaHei", 18, "bold"),
-            bg=config.COLOR_CARD_BG, fg=config.COLOR_TEXT,
-        ).pack(side=tk.LEFT, padx=15)
+        brand = tk.Frame(header, bg=Pal.card)
+        brand.pack(side=tk.LEFT, padx=(18, 0))
+        logo = tk.Canvas(brand, width=42, height=42, bg=Pal.card, highlightthickness=0)
+        logo.pack(side=tk.LEFT)
+        theme.draw_shield(logo, 21, 21, 36, Pal.accent)
+        brand_text = tk.Frame(brand, bg=Pal.card)
+        brand_text.pack(side=tk.LEFT, padx=(10, 0))
+        tk.Label(brand_text, text="监考中心", font=font(16, "bold"), bg=Pal.card,
+                 fg=Pal.text).pack(anchor="w")
+        auth_txt = "令牌认证" if config.AUTH_TOKEN else "无认证"
+        tls_txt = "TLS 加密" if config.USE_TLS else "明文传输"
+        tk.Label(brand_text,
+                 text=f"屏幕监控 · 端口 {config.SERVER_PORT} · {auth_txt} · {tls_txt}",
+                 font=font(9), bg=Pal.card, fg=Pal.muted).pack(anchor="w")
 
-        tk.Label(
-            header,
-            text=f"端口: {config.SERVER_PORT}  |  认证: {'启用' if config.AUTH_TOKEN else '关闭'}",
-            font=("Microsoft YaHei", 11),
-            bg=config.COLOR_CARD_BG, fg="#888888",
-        ).pack(side=tk.LEFT, padx=15)
+        btns = tk.Frame(header, bg=Pal.card)
+        btns.pack(side=tk.RIGHT, padx=(6, 18))
+        stop_btn = theme.RoundButton(btns, "结束监考", kind="danger", size=10,
+                                     command=self.stop_all_clients)
+        export_btn = theme.RoundButton(btns, "导出日志", kind="primary", size=10,
+                                       command=self.export_log)
+        stop_btn.pack(side=tk.RIGHT)
+        export_btn.pack(side=tk.RIGHT, padx=(0, 10))
 
-        self.status_count_label = tk.Label(
-            header, text="在线: 0 | 报警: 0",
-            font=("Microsoft YaHei", 11),
-            bg=config.COLOR_CARD_BG, fg=config.COLOR_TEXT,
-        )
-        self.status_count_label.pack(side=tk.RIGHT, padx=15)
+        stats = tk.Frame(header, bg=Pal.card)
+        stats.pack(side=tk.RIGHT, padx=4)
+        self.stat_online = theme.Pill(stats, "在线 0", dot=Pal.normal,
+                                      surround=Pal.card, fg=Pal.text, bg=Pal.hover)
+        self.stat_offline = theme.Pill(stats, "离线 0", dot=Pal.offline,
+                                       surround=Pal.card, fg=Pal.muted, bg=Pal.hover)
+        self.stat_alert = theme.Pill(stats, "报警 0", dot=Pal.alert,
+                                     surround=Pal.card, fg=Pal.muted, bg=Pal.hover)
+        for p in (self.stat_online, self.stat_offline, self.stat_alert):
+            p.pack(side=tk.LEFT, padx=3)
+        self.clock_pill = theme.Pill(header, "", surround=Pal.card, fg=Pal.muted,
+                                     bg=Pal.hover)
+        self.clock_pill.pack(side=tk.RIGHT, padx=(4, 10))
+        self._tick_clock()
 
-        export_btn = tk.Button(
-            header, text="导出日志", font=("Microsoft YaHei", 10),
-            command=self.export_log, bg="#2196F3", fg="white",
-            relief=tk.FLAT, padx=10, pady=3,
-        )
-        export_btn.pack(side=tk.RIGHT, padx=5)
+        # ── 报警横幅（默认隐藏）──
+        banner_holder = tk.Frame(self.root, bg=Pal.bg)
+        self._banner_holder = banner_holder
+        self.alert_banner = theme.Banner(banner_holder, surround=Pal.bg)
+        self.alert_banner.pack(fill=tk.X, padx=16, pady=(12, 0))
 
-        stop_btn = tk.Button(
-            header, text="结束监考", font=("Microsoft YaHei", 10),
-            command=self.stop_all_clients, bg="#F44336", fg="white",
-            relief=tk.FLAT, padx=10, pady=3,
-        )
-        stop_btn.pack(side=tk.RIGHT, padx=5)
+        # ── 主区域：左考生网格 / 右日志+预览 ──
+        self.main_frame = tk.Frame(self.root, bg=Pal.bg)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(10, 6))
+        self.main_frame.columnconfigure(0, weight=1)
+        self.main_frame.columnconfigure(1, weight=0, minsize=396)
+        self.main_frame.rowconfigure(0, weight=1)
 
-        # 报警横幅
-        self.alert_banner = tk.Frame(self.root, bg=config.COLOR_ALERT, height=35)
-        tk.Label(
-            self.alert_banner, text="", font=("Microsoft YaHei", 12, "bold"),
-            bg=config.COLOR_ALERT, fg="white",
-        ).pack(expand=True)
+        # 左侧：考生卡片网格
+        left = tk.Frame(self.main_frame, bg=Pal.bg)
+        left.grid(row=0, column=0, sticky="nsew")
+        head_row = theme.section_title(left, "考生状态")
+        head_row.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(head_row, text="点击卡片查看截图", font=font(9),
+                 bg=Pal.bg, fg=Pal.muted).pack(side=tk.RIGHT)
+        holder, self.clients_canvas, self.clients_inner = theme.make_scroll_canvas(left)
+        holder.pack(fill=tk.BOTH, expand=True)
+        self.clients_canvas.bind("<Configure>", self._relayout_grid)
 
-        # 主内容区
-        self.main_frame = tk.Frame(self.root, bg=config.COLOR_BG)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # 空状态提示卡
+        self._empty_hint = theme.Card(self.clients_inner, min_h=158)
+        eh_icon = tk.Canvas(self._empty_hint.inner, width=44, height=44,
+                            bg=self._empty_hint.bg_fill, highlightthickness=0)
+        theme.draw_shield(eh_icon, 22, 22, 34, Pal.border, check=False)
+        eh_icon.pack(expand=True, pady=(18, 4))
+        tk.Label(self._empty_hint.inner, text="等待考生接入 …", font=font(12, "bold"),
+                 bg=self._empty_hint.bg_fill, fg=Pal.muted).pack()
+        tk.Label(self._empty_hint.inner, text="请确认考生端已启动并指向本服务地址",
+                 font=font(9), bg=self._empty_hint.bg_fill, fg=theme.darker(Pal.muted, 0.2)).pack(
+            pady=(2, 18))
+        self._empty_hint.grid(row=0, column=0, sticky="ew", padx=4, pady=5)
 
-        # 左侧：考生网格
-        left_frame = tk.Frame(self.main_frame, bg=config.COLOR_BG)
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # 右侧：事件日志 + 截图预览
+        right = tk.Frame(self.main_frame, bg=Pal.bg)
+        right.grid(row=0, column=1, sticky="nsew")
 
-        tk.Label(
-            left_frame, text="考生状态", font=("Microsoft YaHei", 13, "bold"),
-            bg=config.COLOR_BG, fg=config.COLOR_TEXT,
-        ).pack(anchor=tk.W, pady=(0, 5))
+        theme.section_title(right, "事件日志", Pal.accent2).pack(fill=tk.X)
+        filters = tk.Frame(right, bg=Pal.bg)
+        filters.pack(fill=tk.X, pady=(4, 8))
+        self._log_pills = {}
+        for label in ("全部", "上线", "违规", "离线", "系统"):
+            p = theme.Pill(filters, label, size=9, padx=10, pady=4,
+                           command=lambda l=label: self._set_log_filter(l))
+            p.pack(side=tk.LEFT, padx=(0, 6))
+            self._log_pills[label] = p
+        self._set_log_filter("全部", render=False)
 
-        self.clients_canvas = tk.Canvas(left_frame, bg=config.COLOR_BG, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=self.clients_canvas.yview)
-        self.clients_inner = tk.Frame(self.clients_canvas, bg=config.COLOR_BG)
-
-        self.clients_inner.bind(
-            "<Configure>",
-            lambda e: self.clients_canvas.configure(scrollregion=self.clients_canvas.bbox("all")),
-        )
-        self.clients_canvas.create_window((0, 0), window=self.clients_inner, anchor=tk.NW)
-        self.clients_canvas.configure(yscrollcommand=scrollbar.set)
-        self.clients_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 右侧：日志面板
-        right_frame = tk.Frame(self.main_frame, bg=config.COLOR_BG, width=350)
-        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
-        right_frame.pack_propagate(False)
-
-        tk.Label(
-            right_frame, text="事件日志", font=("Microsoft YaHei", 13, "bold"),
-            bg=config.COLOR_BG, fg=config.COLOR_TEXT,
-        ).pack(anchor=tk.W, pady=(0, 5))
-
+        log_card = theme.Card(right, pad=8)
+        log_card.pack(fill=tk.BOTH, expand=True)
+        log_sb = ttk.Scrollbar(log_card.inner, command=None, style="Panel.TScrollbar")
         self.log_text = tk.Text(
-            right_frame, bg=config.COLOR_CARD_BG, fg=config.COLOR_TEXT,
-            font=("Consolas", 9), wrap=tk.WORD, state=tk.DISABLED,
-            insertbackground="white",
+            log_card.inner, bg=Pal.card, fg=Pal.text, wrap=tk.WORD, bd=0,
+            highlightthickness=0, state=tk.DISABLED, padx=10, pady=8,
+            width=1, font=font(9), insertbackground=Pal.text,
+            selectbackground=Pal.accent,
         )
-        self.log_text.tag_configure("info", foreground=config.COLOR_TEXT)
-        self.log_text.tag_configure("alert", foreground=config.COLOR_ALERT)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        log_sb.configure(command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_sb.set)
+        log_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        zebra = theme.mix(Pal.card, "#000000", 0.16)
+        self.log_text.tag_configure("even", background=Pal.card)
+        self.log_text.tag_configure("odd", background=zebra)
+        self.log_text.tag_configure("time", foreground=Pal.muted, font=(theme.MONO, 9))
+        self.log_text.tag_configure("info", foreground=Pal.text)
+        self.log_text.tag_configure("alert", foreground=theme.lighter(Pal.alert, 0.12))
+        self.log_text.tag_configure("sys", foreground=Pal.accent)
+        self.log_text.tag_configure("warn", foreground=Pal.warn)
+        self.log_text.tag_configure("ok", foreground=Pal.success)
 
-        log_scroll = ttk.Scrollbar(right_frame, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 截图预览面板
-        preview_frame = tk.Frame(right_frame, bg=config.COLOR_BG, height=200)
-        preview_frame.pack(fill=tk.X, pady=(10, 0))
-        preview_frame.pack_propagate(False)
-
-        self.preview_title = tk.Label(
-            preview_frame, text="截图预览", font=("Microsoft YaHei", 10, "bold"),
-            bg=config.COLOR_BG, fg=config.COLOR_TEXT,
-        )
-        self.preview_title.pack(anchor=tk.W, pady=(0, 3))
-
+        prev_card = theme.Card(right, pad=12, min_h=292)
+        prev_card.pack(fill=tk.X, pady=(12, 0))
+        ptop = prev_card.add()
+        ptop.pack(fill=tk.X)
+        self.preview_title = tk.Label(ptop, text="截图预览", font=font(11, "bold"),
+                                      bg=prev_card.bg_fill, fg=Pal.text)
+        self.preview_title.pack(side=tk.LEFT)
+        self.preview_live = theme.Pill(ptop, "待机", dot=Pal.offline, size=9,
+                                       padx=9, pady=4, bg=Pal.hover, fg=Pal.muted,
+                                       surround=prev_card.bg_fill)
+        self.preview_live.pack(side=tk.RIGHT)
         self.preview_label = tk.Label(
-            preview_frame, text="点击考生卡片查看最新截图",
-            font=("Microsoft YaHei", 9), bg=config.COLOR_CARD_BG,
-            fg="#888888", anchor=tk.CENTER,
+            prev_card.inner, text="点击左侧考生卡片\n查看该考生最新截图",
+            font=font(10), bg=Pal.deep, fg=Pal.muted, justify=tk.CENTER,
         )
-        self.preview_label.pack(fill=tk.BOTH, expand=True, ipady=30)
+        self.preview_label.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.preview_label.bind("<Double-Button-1>", lambda e: self._open_preview_window())
+
         self._preview_photo = None
         self._preview_client = None
         self.root.after(config.PREVIEW_REFRESH_MS, self.refresh_preview)
+
+        # ── 底部状态条 ──
+        sbar = tk.Frame(self.root, bg=theme.mix(Pal.bg, Pal.card, 0.5))
+        sbar.pack(fill=tk.X, side=tk.BOTTOM)
+        tk.Frame(sbar, bg=Pal.border, height=1).pack(fill=tk.X)
+        row = tk.Frame(sbar, bg=theme.mix(Pal.bg, Pal.card, 0.5))
+        row.pack(fill=tk.X, padx=16, pady=4)
+        tk.Label(row, text=f"● 服务监听 {config.SERVER_HOST}:{config.SERVER_PORT}",
+                 font=(theme.MONO, 9), bg=row["bg"], fg=Pal.success).pack(side=tk.LEFT)
+        tk.Label(row, text=f"数据: {config.DB_FILE} · 截图: {config.SCREENSHOT_DIR}/ · 保留 {config.SCREENSHOT_RETENTION_DAYS} 天",
+                 font=font(9), bg=row["bg"], fg=Pal.muted).pack(side=tk.RIGHT)
+
+    # ──────────── 布局 / 小工具 ────────────
+
+    def _tick_clock(self):
+        self.clock_pill.set(datetime.now().strftime("%H:%M:%S"))
+        self.root.after(1000, self._tick_clock)
+
+    def _relayout_grid(self, _event=None):
+        """考生卡片自适应列数（宽度变化 / 新卡片接入时重排）。"""
+        w = self.clients_canvas.winfo_width()
+        cols = max(1, min(3, (w - 16) // 330))
+        cards = [f["card"] for f in self.client_frames.values()]
+        if cols == self._grid_cols and cards:
+            return
+        self._grid_cols = cols
+        for c in cards:
+            c.grid_forget()
+        if not cards:
+            self._empty_hint.grid(row=0, column=0, sticky="ew", padx=4, pady=5)
+        else:
+            self._empty_hint.grid_forget()
+        for i, c in enumerate(cards):
+            r, col = divmod(i, cols)
+            c.grid(row=r, column=col, sticky="nsew", padx=4, pady=5)
+            self.clients_inner.rowconfigure(r, weight=1, uniform="row")
+        for c in range(3):
+            self.clients_inner.columnconfigure(
+                c, weight=1 if c < cols else 0,
+                uniform="col" if c < cols else None)
 
     # ──────────── 日志 ────────────
 
     def add_log(self, message: str, tag: str = "info", client_id: str = "", kind: str = "info"):
         ts_str = datetime.now().strftime("%H:%M:%S")
-        line = f"[{ts_str}] {message}\n"
         self.event_log.append((ts_str, message))
         # 持久化到 SQLite
         self.db.add_event(client_id or "-", kind, message)
         log.info(message)
 
-        def _insert():
-            self.log_text.config(state=tk.NORMAL)
-            self.log_text.insert(tk.END, line, tag)
-            self.log_text.see(tk.END)
-            self.log_text.config(state=tk.DISABLED)
+        def _append():
+            self._log_records.append((ts_str, message, tag, kind))
+            if self._log_match(kind):
+                self._append_log_line(ts_str, message, tag, self._log_rows % 2 == 1)
+                self._log_rows += 1
+                self.log_text.see(tk.END)
 
-        self.root.after(0, _insert)
+        self.root.after(0, _append)
+
+    def _log_match(self, kind: str) -> bool:
+        f = self._log_filter
+        if f == "全部":
+            return True
+        spec = {
+            "上线": ("register",),
+            "违规": ("violation", "freeze"),
+            "离线": ("offline", "timeout"),
+        }.get(f)
+        known = ("register", "violation", "freeze", "offline", "timeout")
+        if spec is not None:
+            return kind in spec
+        return kind not in known  # "系统"
+
+    def _set_log_filter(self, name: str, render: bool = True):
+        self._log_filter = name
+        Pal = theme.Pal
+        for label, p in self._log_pills.items():
+            active = label == name
+            p.set(bg=Pal.accent if active else Pal.hover,
+                  fg="#ffffff" if active else Pal.muted)
+        if render:
+            self._render_log()
+
+    def _append_log_line(self, ts: str, message: str, tag: str, odd: bool):
+        t = self.log_text
+        zebra = "odd" if odd else "even"
+        t.config(state=tk.NORMAL)
+        t.insert(tk.END, f" {ts}  ", ("time", zebra))
+        t.insert(tk.END, message + "\n", (tag, zebra))
+        t.config(state=tk.DISABLED)
+
+    def _render_log(self):
+        """按当前过滤器重绘日志（保留最近 600 条匹配记录）。"""
+        t = self.log_text
+        t.config(state=tk.NORMAL)
+        t.delete("1.0", tk.END)
+        t.config(state=tk.DISABLED)
+        rows = [rec for rec in self._log_records if self._log_match(rec[3])][-600:]
+        self._log_rows = len(rows)
+        for i, (ts, msg, tag, _kind) in enumerate(rows):
+            self._append_log_line(ts, msg, tag, i % 2 == 1)
+        if rows:
+            t.see(tk.END)
 
     def show_alert_banner(self, text: str):
         def _show():
-            for child in self.alert_banner.winfo_children():
-                child.config(text=f"⚠ {text}")
-            self.alert_banner.pack(fill=tk.X, before=self.main_frame)
+            self.alert_banner.set(text)
+            self._banner_holder.pack(fill=tk.X, before=self.main_frame)
+            self.alert_banner.start_pulse()
             if self._alert_hide_after is not None:
                 try:
                     self.root.after_cancel(self._alert_hide_after)
@@ -422,50 +542,67 @@ class MonitorServer:
         self.root.after(0, _show)
 
     def hide_alert_banner(self):
-        self.alert_banner.pack_forget()
+        self._alert_hide_after = None
+        self.alert_banner.stop_pulse()
+        self._banner_holder.pack_forget()
 
     # ──────────── 考生卡片 ────────────
 
     def create_client_card(self, client_id: str, hostname: str = ""):
-        card = tk.Frame(self.clients_inner, bg=config.COLOR_CARD_BG, padx=10, pady=8)
-        card.pack(fill=tk.X, padx=5, pady=3)
+        Pal, font = theme.Pal, theme.font
+        wrapper = tk.Frame(self.clients_inner, bg=Pal.bg)
+        card = theme.Card(wrapper, pad=14, min_h=184)
+        card.pack(fill=tk.BOTH, expand=True)
+        inner, cbg = card.inner, card.bg_fill
 
-        indicator = tk.Canvas(card, width=12, height=12, bg=config.COLOR_CARD_BG, highlightthickness=0)
-        indicator.pack(side=tk.LEFT, padx=(0, 8))
-        dot = indicator.create_oval(2, 2, 10, 10, fill=config.COLOR_NORMAL, outline="")
+        top = card.add()
+        top.pack(fill=tk.X)
+        dot = theme.Dot(top, size=16, color=Pal.offline, bg=cbg)
+        dot.pack(side=tk.LEFT, pady=(3, 4))
+        id_col = tk.Frame(top, bg=cbg)
+        id_col.pack(side=tk.LEFT, padx=(9, 0))
+        name_label = tk.Label(id_col, text=client_id, font=font(13, "bold"),
+                              bg=cbg, fg=Pal.text)
+        name_label.pack(anchor="w")
+        host_label = tk.Label(id_col, text=f"主机 {hostname or '未知'}",
+                              font=font(9), bg=cbg, fg=Pal.muted)
+        host_label.pack(anchor="w")
+        time_label = tk.Label(top, text="--:--:--", font=(theme.MONO, 9),
+                              bg=cbg, fg=Pal.muted)
+        time_label.pack(side=tk.RIGHT, pady=3)
 
-        info_frame = tk.Frame(card, bg=config.COLOR_CARD_BG)
-        info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        acts = card.add()
+        acts.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+        theme.RoundButton(acts, "截图历史", kind="ghost", size=9, padx=12, pady=5,
+                          surround=cbg,
+                          command=lambda: self.view_screenshots(client_id)).pack(side=tk.RIGHT)
+        theme.RoundButton(acts, "预览", kind="primary", size=9, padx=14, pady=5,
+                          surround=cbg,
+                          command=lambda: self.preview_latest_screenshot(client_id)).pack(
+            side=tk.RIGHT, padx=(0, 6))
 
-        name_label = tk.Label(
-            info_frame, text=f"考生: {client_id}",
-            font=("Microsoft YaHei", 11, "bold"),
-            bg=config.COLOR_CARD_BG, fg=config.COLOR_TEXT,
-        )
-        name_label.pack(anchor=tk.W)
+        pills = card.add()
+        pills.pack(fill=tk.X, pady=(8, 0))
+        shot_pill = theme.Pill(pills, "截屏 0", size=9, padx=9, pady=3,
+                               bg=Pal.hover, fg=Pal.muted, surround=cbg)
+        shot_pill.pack(side=tk.LEFT, padx=(2, 5))
+        alert_pill = theme.Pill(pills, "报警 0", size=9, padx=9, pady=3,
+                                bg=Pal.hover, fg=Pal.muted, surround=cbg)
+        alert_pill.pack(side=tk.LEFT, padx=5)
 
-        detail_label = tk.Label(
-            info_frame, text=f"主机: {hostname} | 截屏: 0 | 报警: 0",
-            font=("Microsoft YaHei", 9),
-            bg=config.COLOR_CARD_BG, fg="#888888",
-        )
-        detail_label.pack(anchor=tk.W)
+        reason_label = tk.Label(inner, text="无违规记录", font=font(9), bg=cbg,
+                                fg=Pal.muted, anchor="w")
+        reason_label.pack(fill=tk.X, pady=(4, 0))
 
-        view_btn = tk.Button(
-            card, text="查看截图", font=("Microsoft YaHei", 9),
-            command=lambda: self.view_screenshots(client_id),
-            bg="#2196F3", fg="white", relief=tk.FLAT, padx=8, pady=2,
-        )
-        view_btn.pack(side=tk.RIGHT, padx=5)
-
-        card.bind("<Button-1>", lambda e: self.preview_latest_screenshot(client_id))
-        name_label.bind("<Button-1>", lambda e: self.preview_latest_screenshot(client_id))
-        detail_label.bind("<Button-1>", lambda e: self.preview_latest_screenshot(client_id))
+        card.bind_click(lambda: self.preview_latest_screenshot(client_id))
 
         self.client_frames[client_id] = {
-            "card": card, "indicator": indicator, "dot": dot,
-            "name_label": name_label, "detail_label": detail_label,
+            "card": wrapper, "card_obj": card, "dot": dot,
+            "name_label": name_label, "host_label": host_label,
+            "time_label": time_label, "shot_pill": shot_pill,
+            "alert_pill": alert_pill, "reason_label": reason_label,
         }
+        self._relayout_grid()
 
     def update_client_card(self, client_id: str):
         if client_id not in self.client_frames:
@@ -474,22 +611,40 @@ class MonitorServer:
             if client_id not in self.clients:
                 return
             client = self.clients[client_id]
-            # 拷贝需要的字段，避免长时间持锁
             is_online = client.is_online
             alert_count = client.alert_count
             hostname = client.hostname
             screenshot_count = client.screenshot_count
             last_alert_time = client.last_alert_time
             last_alert_target = client.last_alert_target
+            last_beat = client.last_heartbeat
         frame = self.client_frames[client_id]
+        Pal = theme.Pal
 
         color = self.alert_color(is_online, last_alert_time)
-
-        frame["indicator"].itemconfig(frame["dot"], fill=color)
-        alert_txt = f" | 最近: {last_alert_target}" if last_alert_target else ""
-        frame["detail_label"].config(
-            text=f"主机: {hostname} | 截屏: {screenshot_count} | 报警: {alert_count}{alert_txt}"
-        )
+        frame["dot"].set(color)
+        frame["card_obj"].set_accent(color)
+        suffix = "" if is_online else " · 已离线"
+        frame["host_label"].config(text=f"主机 {hostname or '未知'}{suffix}")
+        frame["shot_pill"].set(f"截屏 {screenshot_count}")
+        if alert_count:
+            frame["alert_pill"].set(
+                f"报警 {alert_count}", fg="#ffffff",
+                bg=theme.darker(config.COLOR_ALERT, 0.18))
+        else:
+            frame["alert_pill"].set("报警 0", fg=Pal.muted, bg=Pal.hover)
+        if last_alert_target:
+            txt = last_alert_target
+            if len(txt) > 14:
+                txt = txt[:14] + "…"
+            red = color == config.COLOR_ALERT
+            frame["reason_label"].config(
+                text=f"最近违规: {txt}",
+                fg=config.COLOR_ALERT if red else Pal.muted)
+        else:
+            frame["reason_label"].config(text="无违规记录", fg=Pal.muted)
+        frame["time_label"].config(
+            text=datetime.fromtimestamp(last_beat).strftime("%H:%M:%S"))
 
     @staticmethod
     def alert_color(is_online: bool, last_alert_time: float,
@@ -539,59 +694,77 @@ class MonitorServer:
 
     def refresh_preview(self):
         cid = self._preview_client
+        Pal = theme.Pal
         if not cid or cid not in self.clients:
             self.root.after(config.PREVIEW_REFRESH_MS, self.refresh_preview)
             return
         client = self.clients[cid]
 
         if client.last_screenshot_b64:
-            photo = self._b64_to_photo(client.last_screenshot_b64, (320, 180))
+            photo = self._b64_to_photo(client.last_screenshot_b64, (368, 200))
             if photo:
                 self._preview_photo = photo
-                self.preview_label.config(image=photo, text="", bg=config.COLOR_CARD_BG)
-                self.preview_title.config(
-                    text=f"最新截图 - {cid} ({datetime.now().strftime('%H:%M:%S')})"
-                )
+                self.preview_label.config(image=photo, text="", bg=Pal.deep)
+                self.preview_title.config(text=f"最新截图 · {cid}")
+                self.preview_live.set(
+                    datetime.now().strftime("实时 %H:%M:%S"),
+                    dot=Pal.success, fg=Pal.success, bg=Pal.hover)
         else:
-            self.preview_label.config(image="", text="暂无截图", bg=config.COLOR_CARD_BG)
-            self.preview_title.config(text=f"截图预览 - {cid}")
+            self.preview_label.config(image="", text="该考生暂无截图", bg=Pal.deep)
+            self.preview_title.config(text=f"截图预览 · {cid}")
+            self.preview_live.set("暂无截图", dot=Pal.offline, fg=Pal.muted, bg=Pal.hover)
 
         self.root.after(config.PREVIEW_REFRESH_MS, self.refresh_preview)
+
+    def _open_preview_window(self):
+        """双击预览：弹出接近原始分辨率的大图窗口。"""
+        cid = self._preview_client
+        if not cid or cid not in self.clients or not self.clients[cid].last_screenshot_b64:
+            return
+        b64 = self.clients[cid].last_screenshot_b64
+        try:
+            img = Image.open(BytesIO(base64.b64decode(b64)))
+        except Exception:
+            messagebox.showwarning("截图预览", "截图数据损坏，无法显示", parent=self.root)
+            return
+        max_w = int(self.root.winfo_screenwidth() * 0.82)
+        max_h = int(self.root.winfo_screenheight() * 0.74)
+        img.thumbnail((max_w, max_h))
+        photo = ImageTk.PhotoImage(img)
+
+        win = tk.Toplevel(self.root)
+        win.configure(bg=theme.Pal.bg)
+        show = theme.dialog_chrome(win, "截图预览", subtitle=f"考生 {cid}")
+        body = tk.Frame(win, bg=theme.Pal.deep)
+        body.pack(fill=tk.BOTH, expand=True)
+        lbl = tk.Label(body, image=photo, bg=theme.Pal.deep)
+        lbl.pack(padx=14, pady=14)
+        win._photo = photo  # 防止 GC
+        show(img.width + 28, img.height + 48 + 28)
 
     # ──────────── 截图历史（翻页） ────────────
 
     def view_screenshots(self, client_id: str):
+        Pal, font = theme.Pal, theme.font
         if client_id not in self.clients:
             return
         client = self.clients[client_id]
         if not client.screenshot_history:
-            messagebox.showinfo("截图记录", f"考生 {client_id} 暂无截图记录")
+            messagebox.showinfo("截图记录", f"考生 {client_id} 暂无截图记录",
+                                parent=self.root)
             return
 
-        PAGE_SIZE = 20
+        PAGE_SIZE = 12
         current_page = [0]  # 用列表包裹以便闭包修改
 
         win = tk.Toplevel(self.root)
-        win.title(f"截图记录 - {client_id}")
-        win.configure(bg=config.COLOR_BG)
-        win.geometry("860x650")
+        win.configure(bg=Pal.bg)
+        show = theme.dialog_chrome(win, "截图历史", subtitle=f"考生 {client_id}")
 
-        title_label = tk.Label(
-            win, text="", font=("Microsoft YaHei", 13, "bold"),
-            bg=config.COLOR_BG, fg=config.COLOR_TEXT,
-        )
-        title_label.pack(pady=10)
+        holder, canvas, inner = theme.make_scroll_canvas(win)
+        holder.pack(fill=tk.BOTH, expand=True, padx=(14, 8), pady=(10, 4))
 
         photos_ref = []  # 防止 GC
-
-        canvas = tk.Canvas(win, bg=config.COLOR_BG, highlightthickness=0)
-        scroll = ttk.Scrollbar(win, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tk.Frame(canvas, bg=config.COLOR_BG)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor=tk.NW)
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         def total_pages():
             return max(1, (len(client.screenshot_history) + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -608,34 +781,34 @@ class MonitorServer:
             start = max(len(history) - (page + 1) * PAGE_SIZE, 0)
             end = len(history) - page * PAGE_SIZE
 
-            title_label.config(
-                text=f"考生 {client_id} 的截图记录 — 第 {page + 1}/{total_pages()} 页 (共 {len(history)} 张)"
-            )
-
-            for ts, b64_img in reversed(history[start:end]):
-                row = tk.Frame(inner, bg=config.COLOR_CARD_BG, padx=8, pady=5)
-                row.pack(fill=tk.X, padx=10, pady=2)
-
-                photo = self._b64_to_photo(b64_img, (240, 160))
+            cols = 2 if canvas.winfo_width() >= 640 else 1
+            for i, (ts, b64_img) in enumerate(reversed(history[start:end])):
+                cell = tk.Frame(inner, bg=Pal.bg)
+                cell.grid(row=i // cols, column=i % cols, sticky="nsew",
+                          padx=4, pady=5)
+                cell.columnconfigure(0, weight=1)
+                card = theme.Card(cell, pad=10, min_h=196)
+                card.pack(fill=tk.BOTH, expand=True)
+                photo = self._b64_to_photo(b64_img, (264, 150))
                 if photo:
                     photos_ref.append(photo)
-                    tk.Label(row, image=photo, bg=config.COLOR_CARD_BG).pack(side=tk.LEFT, padx=5)
+                    tk.Label(card.inner, image=photo, bg=card.bg_fill).pack(pady=(2, 4))
                 else:
-                    tk.Label(
-                        row, text="[图片加载失败]", font=("Microsoft YaHei", 9),
-                        bg=config.COLOR_CARD_BG, fg=config.COLOR_ALERT,
-                    ).pack(side=tk.LEFT, padx=5)
-
-                dt = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-                tk.Label(
-                    row, text=dt, font=("Consolas", 10),
-                    bg=config.COLOR_CARD_BG, fg="#888888", width=8,
-                ).pack(side=tk.LEFT, padx=5)
-
+                    tk.Label(card.inner, text="[图片加载失败]", font=font(9),
+                             bg=card.bg_fill, fg=Pal.alert).pack(expand=True)
+                dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                tk.Label(card.inner, text=dt, font=(theme.MONO, 9),
+                         bg=card.bg_fill, fg=Pal.muted).pack(pady=(0, 4))
             update_page_label()
 
-        nav_frame = tk.Frame(win, bg=config.COLOR_BG)
-        nav_frame.pack(fill=tk.X, pady=5)
+        nav_frame = tk.Frame(win, bg=Pal.bg)
+        nav_frame.pack(fill=tk.X, padx=14, pady=(2, 12))
+        prev_btn = theme.RoundButton(nav_frame, "◀ 更早", kind="ghost", size=10)
+        next_btn = theme.RoundButton(nav_frame, "较新 ▶", kind="primary", size=10)
+        prev_btn.pack(side=tk.LEFT)
+        next_btn.pack(side=tk.RIGHT)
+        page_pill = theme.Pill(nav_frame, "", size=10, bg=Pal.hover, fg=Pal.text)
+        page_pill.pack(side=tk.LEFT, padx=14)
 
         def prev_page():
             if current_page[0] < total_pages() - 1:
@@ -647,26 +820,15 @@ class MonitorServer:
                 current_page[0] -= 1
                 render_page()
 
-        tk.Button(
-            nav_frame, text="◀ 上一页", font=("Microsoft YaHei", 10),
-            command=prev_page, bg="#2196F3", fg="white", relief=tk.FLAT, padx=10,
-        ).pack(side=tk.LEFT, padx=20)
-
-        tk.Button(
-            nav_frame, text="下一页 ▶", font=("Microsoft YaHei", 10),
-            command=next_page, bg="#2196F3", fg="white", relief=tk.FLAT, padx=10,
-        ).pack(side=tk.RIGHT, padx=20)
-
-        page_label = tk.Label(
-            nav_frame, text="", font=("Microsoft YaHei", 10),
-            bg=config.COLOR_BG, fg=config.COLOR_TEXT,
-        )
-        page_label.pack()
+        prev_btn._command = prev_page
+        next_btn._command = next_page
 
         def update_page_label():
-            page_label.config(text=f"第 {current_page[0] + 1} / {total_pages()} 页")
+            page_pill.set(f"第 {current_page[0] + 1} / {total_pages()} 页 · 共 {len(client.screenshot_history)} 张")
 
         render_page()
+        show(920, 660)
+        win.after(120, render_page)   # 定尺寸后按实际宽度重排两列
 
     # ──────────── 导出 ────────────
 
@@ -681,39 +843,48 @@ class MonitorServer:
 
     def export_log(self):
         if not self._teacher_authorized():
-            messagebox.showwarning("导出日志", "口令错误，已取消导出")
+            messagebox.showwarning("导出日志", "口令错误，已取消导出", parent=self.root)
             return
         if not self.event_log and not self.db:
-            messagebox.showinfo("导出", "暂无日志记录")
+            messagebox.showinfo("导出", "暂无日志记录", parent=self.root)
             return
 
         filename = f"monitor_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         filepath = EXPORT_DIR / filename
         self.db.export_events_csv(str(filepath))
 
-        messagebox.showinfo("导出成功", f"日志已导出到:\n{filepath}")
-        self.add_log(f"日志已导出: {filepath}")
+        messagebox.showinfo("导出成功", f"日志已导出到:\n{filepath}", parent=self.root)
+        self.add_log(f"日志已导出: {filepath}", "sys", "-", "info")
 
     # ──────────── 统计 ────────────
 
     def update_counts(self):
         with self._lock:
             online = sum(1 for c in self.clients.values() if c.is_online)
+            offline = sum(1 for c in self.clients.values() if not c.is_online)
             total_alerts = sum(c.alert_count for c in self.clients.values())
-        self.status_count_label.config(text=f"在线: {online} | 报警: {total_alerts}")
+        self.stat_online.set(f"在线 {online}")
+        self.stat_offline.set(f"离线 {offline}")
+        if total_alerts:
+            self.stat_alert.set(f"报警 {total_alerts}", fg="#ffffff",
+                                bg=theme.darker(config.COLOR_ALERT, 0.18))
+        else:
+            self.stat_alert.set("报警 0", fg=theme.Pal.muted, bg=theme.Pal.hover)
 
     # ──────────── 结束监考 ────────────
 
     def stop_all_clients(self):
         with self._lock:
             if not self.clients:
-                messagebox.showwarning("结束监考", "当前没有在线考生")
+                messagebox.showwarning("结束监考", "当前没有在线考生", parent=self.root)
                 return
             count = len(self.clients)
         if not self._teacher_authorized():
-            messagebox.showwarning("结束监考", "口令错误，已取消操作")
+            messagebox.showwarning("结束监考", "口令错误，已取消操作", parent=self.root)
             return
-        if not messagebox.askyesno("结束监考", f"确认结束监考，将关闭全部 {count} 个考生端？"):
+        if not messagebox.askyesno("结束监考",
+                                   f"确认结束监考，将关闭全部 {count} 个考生端？",
+                                   parent=self.root):
             return
 
         stopped = 0
@@ -738,8 +909,9 @@ class MonitorServer:
                 stopped += 1
             except Exception:
                 pass
-        self.add_log(f"已向 {stopped} 个考生端发送结束指令")
-        messagebox.showinfo("结束监考", f"已向 {stopped} 个考生端发送结束指令")
+        self.add_log(f"已向 {stopped} 个考生端发送结束指令", "warn", "-", "system")
+        messagebox.showinfo("结束监考", f"已向 {stopped} 个考生端发送结束指令",
+                            parent=self.root)
 
     # ════════════════════════════════════════════════════════════
     #  WebSocket 消息处理
@@ -982,8 +1154,6 @@ class MonitorServer:
 
     def run(self):
         self.setup_gui()
-        style = ttk.Style()
-        style.theme_use("clam")
 
         self.loop = asyncio.new_event_loop()
 
