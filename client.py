@@ -10,7 +10,7 @@
   - 修正默认服务器地址为 ws://127.0.0.1:8765
   - 中文帮助信息
 
-用法: python client.py --server ws://192.168.1.100:8765 --student-id 2024001
+用法: python client.py --server ws://<监考端IP>:8765 --student-id 2024001
       python client.py --student-id 2024001                     # 默认连接本机
 """
 
@@ -1040,8 +1040,8 @@ def main():
         epilog="""
 示例:
   python client.py --student-id 2024001
-  python client.py --server ws://192.168.1.100:8765 --student-id 2024001
-  python client.py --student-id 2024001 --server ws://10.0.0.1:8765
+  python client.py --server ws://<监考端IP>:8765 --student-id 2024001
+  python client.py --student-id 2024001 --server ws://<监考端IP>:8765
         """,
     )
     parser.add_argument(

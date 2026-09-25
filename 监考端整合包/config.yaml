@@ -3,9 +3,11 @@
 
 # ─── 网络 ───
 network:
-  host: "0.0.0.0"
+  host: "0.0.0.0"              # 监听地址，0.0.0.0=所有网卡（勿改）
   port: 8765
   token: "exam2024"            # 认证令牌，客户端必须携带此值才能注册
+  advertise_ip: ""             # 本机内网 IP：留空=自动探测并显示；填了则用此值
+                               # 多网卡/有 VPN 时自动探测可能不准，可在此写死，如 "192.168.5.79"
 
 # ─── TLS 加密（可选） ───
 tls:
@@ -19,6 +21,7 @@ screenshot:
   interval: 5                   # 采样间隔（秒）
   quality: 60                   # JPEG 压缩质量 (1-100)
   dir: "screenshots"            # 本地截图保存目录
+  save_local: false             # 考生端设为 false：仅上传监考端，不在本地保存
   retention_days: 7             # 截图保留天数，超过自动清理
   multi_monitor: true           # 是否抓取所有显示器
 

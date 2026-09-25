@@ -76,6 +76,34 @@ def screenshot_filename(now: datetime | None = None) -> str:
     return now.strftime("%H%M%S_%f") + ".jpg"
 
 
+def detect_lan_ip() -> str:
+    """探测本机在局域网中的 IPv4 地址（供监考端显示，便于考生端填写）。
+
+    通过向一个外部地址「连接」（UDP 不发包）让系统选出默认出口网卡，
+    从而拿到该网卡的真实内网 IP；失败则回退到第一个非回环地址。
+    结果可能受 VPN 等虚拟网卡影响，必要时用 config.network.advertise_ip 覆盖。
+    """
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if not ip.startswith("127."):
+                return ip
+    except OSError:
+        pass
+    return "127.0.0.1"
+
+
 class Database:
     """线程安全的 SQLite 封装（单连接 + 锁）。"""
 
@@ -268,6 +296,7 @@ class MonitorServer:
         self._log_filter = "全部"
         self._log_rows = 0
         self._grid_cols = -1
+        self._grid_count = -1
 
     # ──────────── GUI ────────────
 
@@ -429,8 +458,11 @@ class MonitorServer:
         tk.Frame(sbar, bg=Pal.border, height=1).pack(fill=tk.X)
         row = tk.Frame(sbar, bg=theme.mix(Pal.bg, Pal.card, 0.5))
         row.pack(fill=tk.X, padx=16, pady=4)
+        lan_ip = config.ADVERTISE_IP or detect_lan_ip()
         tk.Label(row, text=f"● 服务监听 {config.SERVER_HOST}:{config.SERVER_PORT}",
                  font=(theme.MONO, 9), bg=row["bg"], fg=Pal.success).pack(side=tk.LEFT)
+        tk.Label(row, text=f"考生端请填 IP: {lan_ip}", font=(theme.MONO, 9),
+                 bg=row["bg"], fg=Pal.accent).pack(side=tk.LEFT, padx=(14, 0))
         tk.Label(row, text=f"数据: {config.DB_FILE} · 截图: {config.SCREENSHOT_DIR}/ · 保留 {config.SCREENSHOT_RETENTION_DAYS} 天",
                  font=font(9), bg=row["bg"], fg=Pal.muted).pack(side=tk.RIGHT)
 
@@ -441,13 +473,16 @@ class MonitorServer:
         self.root.after(1000, self._tick_clock)
 
     def _relayout_grid(self, _event=None):
-        """考生卡片自适应列数（宽度变化 / 新卡片接入时重排）。"""
+        """考生卡片自适应列数（宽度变化 / 卡片增删时重排）。"""
         w = self.clients_canvas.winfo_width()
         cols = max(1, min(3, (w - 16) // 330))
         cards = [f["card"] for f in self.client_frames.values()]
-        if cols == self._grid_cols and cards:
+        # 列数和卡片数量都未变才跳过：仅比较列数会在「首帧建立缓存 → 新卡片接入」
+        # 时误判为无需重排，导致新卡片从未 grid() 而始终不可见
+        if cols == self._grid_cols and len(cards) == self._grid_count:
             return
         self._grid_cols = cols
+        self._grid_count = len(cards)
         for c in cards:
             c.grid_forget()
         if not cards:
@@ -573,6 +608,9 @@ class MonitorServer:
 
         acts = card.add()
         acts.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+        theme.RoundButton(acts, "关闭", kind="danger", size=9, padx=12, pady=5,
+                          surround=cbg,
+                          command=lambda: self.close_client(client_id)).pack(side=tk.LEFT)
         theme.RoundButton(acts, "截图历史", kind="ghost", size=9, padx=12, pady=5,
                           surround=cbg,
                           command=lambda: self.view_screenshots(client_id)).pack(side=tk.RIGHT)
@@ -870,6 +908,44 @@ class MonitorServer:
                                 bg=theme.darker(config.COLOR_ALERT, 0.18))
         else:
             self.stat_alert.set("报警 0", fg=theme.Pal.muted, bg=theme.Pal.hover)
+
+    # ──────────── 单独关闭考生端 ────────────
+
+    def close_client(self, client_id: str):
+        """向单个考生端发送结束指令并断开其连接（卡片保留，随后显示为离线）。"""
+        with self._lock:
+            client = self.clients.get(client_id)
+            if client is None:
+                messagebox.showwarning("关闭考生端", "该考生已不存在", parent=self.root)
+                return
+            ws = client.ws
+        if not self._teacher_authorized():
+            messagebox.showwarning("关闭考生端", "口令错误，已取消操作", parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "关闭考生端", f"确认关闭考生 {client_id} 的考生端？\n该考生将退出监控程序。",
+            parent=self.root,
+        ):
+            return
+
+        if ws is None:
+            messagebox.showinfo("关闭考生端", f"考生 {client_id} 当前未连接", parent=self.root)
+            return
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                ws.send(json.dumps({"type": "stop", "message": "监考已关闭该考生端"})),
+                self.loop,
+            )
+            fut.result(timeout=3)
+        except Exception as e:
+            log.warning("向 %s 发送关闭指令失败: %s", client_id, e)
+            messagebox.showwarning("关闭考生端",
+                                   f"无法向考生 {client_id} 发送关闭指令（可能已离线）",
+                                   parent=self.root)
+            return
+        self.add_log(f"已向考生 {client_id} 发送关闭指令", "warn", client_id, "system")
+        messagebox.showinfo("关闭考生端", f"已关闭考生 {client_id} 的考生端", parent=self.root)
 
     # ──────────── 结束监考 ────────────
 

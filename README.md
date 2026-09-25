@@ -101,7 +101,7 @@ python client.py --student-id 2024001
 连接真实监考端时指定地址：
 
 ```bash
-python client.py --server ws://192.168.1.100:8765 --student-id 2024001
+python client.py --server ws://<监考端IP>:8765 --student-id 2024001
 ```
 
 ### 第三步：开始监控
@@ -531,7 +531,7 @@ python client.py --student-id <学号> [--server ws://<地址>:<端口>]
 python client.py --student-id 2024001
 
 # 连接远程监考端
-python client.py --server ws://192.168.1.100:8765 --student-id 2024001
+python client.py --server ws://<监考端IP>:8765 --student-id 2024001
 ```
 
 ---

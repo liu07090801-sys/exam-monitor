@@ -437,9 +437,10 @@ class Card(tk.Frame):
         return tk.Label(self.inner, text=text, fg=fg or Pal.text, **kw)
 
     def _bind_recursive(self, w, cmd):
-        w.bind("<Button-1>", lambda e: cmd())
-        if isinstance(w, (tk.Canvas,)):
-            pass
+        # 跳过自管理点击的控件：它们已绑定 <ButtonPress-1>，若再被整卡绑定
+        # 覆盖（同一事件序列后绑生效），点按钮会误触发整卡动作
+        if not isinstance(w, (RoundButton, Pill)):
+            w.bind("<Button-1>", lambda e: cmd())
         for c in w.winfo_children():
             self._bind_recursive(c, cmd)
 

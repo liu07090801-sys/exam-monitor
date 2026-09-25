@@ -17,7 +17,8 @@ else:
 _CONFIG_PATH = BASE_DIR / "config.yaml"
 
 _DEFAULTS = {
-    "network": {"host": "0.0.0.0", "port": 8765, "token": "exam2024"},
+    "network": {"host": "0.0.0.0", "port": 8765, "token": "exam2024",
+                "advertise_ip": ""},
     "tls": {
         "enabled": False,
         "cert_file": "cert.pem",
@@ -93,6 +94,7 @@ _cfg = _load_yaml()
 SERVER_HOST: str = _cfg["network"]["host"]
 SERVER_PORT: int = _cfg["network"]["port"]
 AUTH_TOKEN: str = _cfg["network"]["token"]
+ADVERTISE_IP: str = _cfg["network"].get("advertise_ip", "") or ""
 
 # TLS
 USE_TLS: bool = _cfg["tls"]["enabled"]
@@ -169,7 +171,7 @@ COLOR_HOVER: str = _cfg["colors"].get("hover", "#1d2a4a")
 def reload():
     """运行时重新加载配置（热加载）。"""
     global _cfg
-    global SERVER_HOST, SERVER_PORT, AUTH_TOKEN
+    global SERVER_HOST, SERVER_PORT, AUTH_TOKEN, ADVERTISE_IP
     global USE_TLS, TLS_CERT_FILE, TLS_KEY_FILE, TLS_CA_FILE
     global SCREENSHOT_INTERVAL, SCREENSHOT_QUALITY, SCREENSHOT_DIR, SAVE_LOCAL
     global SCREENSHOT_RETENTION_DAYS, MULTI_MONITOR
@@ -190,6 +192,7 @@ def reload():
     SERVER_HOST = _cfg["network"]["host"]
     SERVER_PORT = _cfg["network"]["port"]
     AUTH_TOKEN = _cfg["network"]["token"]
+    ADVERTISE_IP = _cfg["network"].get("advertise_ip", "") or ""
 
     USE_TLS = _cfg["tls"]["enabled"]
     TLS_CERT_FILE = _cfg["tls"]["cert_file"]
