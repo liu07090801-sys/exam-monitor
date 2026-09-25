@@ -89,6 +89,24 @@ python server.py
 
 启动后显示监考中心仪表盘，监听端口 `8765`。
 
+**放行防火墙（首次必做，以管理员身份打开 CMD）：**
+
+```cmd
+netsh advfirewall firewall add rule name="考试监控8765" dir=in action=allow protocol=TCP localport=8765
+```
+
+如需临时关闭防火墙（不推荐，测完务必重新开启）：
+
+```cmd
+netsh advfirewall set allprofiles state off
+```
+
+重新开启：
+
+```cmd
+netsh advfirewall set allprofiles state on
+```
+
 ### 第二步：启动考试端
 
 在每台考生机器上运行：
@@ -307,14 +325,21 @@ tls:
 2. 监考端与考生端均需放行防火墙 8765 端口（以管理员身份运行）：
 
    **Windows（推荐，只放行端口）：**
-   ```powershell
+   ```cmd
    netsh advfirewall firewall add rule name="考试监控8765" dir=in action=allow protocol=TCP localport=8765
    ```
 
    首次启动时如弹出 Windows 防火墙提示，请点「允许访问」。
 
    **如需临时关闭防火墙（不推荐，测完记得开启）：**
-   打开 Windows 安全中心 → 防火墙和网络保护 → 关闭 Microsoft Defender 防火墙
+   ```cmd
+   netsh advfirewall set allprofiles state off
+   ```
+
+   重新开启：
+   ```cmd
+   netsh advfirewall set allprofiles state on
+   ```
 
 3. 修改 `config.yaml` 中的 `token`（建议使用复杂随机字符串）
 4. 根据考试需求调整白名单、截屏间隔等参数

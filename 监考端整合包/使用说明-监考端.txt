@@ -9,6 +9,11 @@
   双击【启动监考端.bat】（或命令行执行 python server.py）
   看到"监考中心"仪表盘窗口即启动成功
 
+  首次必做：放行防火墙 8765 端口（以管理员身份打开 CMD，执行）
+    netsh advfirewall firewall add rule name="考试监控8765" dir=in action=allow protocol=TCP localport=8765
+  首次启动如弹出 Windows 防火墙提示，点「允许访问」亦可。
+  若考生端连不上，多半是这条没放行。
+
 二、确认考生连接
   - 监考端窗口底部会显示「考生端请填 IP: x.x.x.x」，考生端输入该 IP 即可
     （也可编辑 config.yaml 的 network.advertise_ip 手动指定本机 IP）
